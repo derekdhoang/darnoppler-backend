@@ -1,40 +1,82 @@
 name: Build HRRR Tiles
 
 on:
-  # Manual trigger (you can still hit "Run workflow" in the UI)
+  # Manual trigger — you can pick any run
   workflow_dispatch:
-  
+    inputs:
+      date:
+        description: 'Date (YYYYMMDD). Leave blank for latest.'
+        required: false
+        default: ''
+      run:
+        description: 'Run hour (00-23). Leave blank for 1hr ago.'
+        required: false
+        default: ''
+
+  # Scheduled trigger — always fetches the 12Z run
+  # 13:00 UTC is 8 AM CDT (summer) / 7 AM CST (winter)
+  schedule:
+    - cron: '0 13 * * *'
+
 jobs:
   build-tiles:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      
+
       - name: Install GDAL and system deps
         run: |
           sudo apt-get update
           sudo apt-get install -y gdal-bin python3-gdal libgdal-dev
-      
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: Verify installation
         run: |
           python --version
           gdal2tiles.py --version
           gdal_translate --version
           python -c "import pygrib; print(f'pygrib: {pygrib.__version__}')"
-      
+
+      - name: Determine run target
+        id: target
+        run: |
+          # Scheduled runs always target the 12Z run of today (UTC)
+          # Manual runs can override via workflow inputs
+          
+          INPUT_DATE="${{ github.event.inputs.date }}"
+          INPUT_RUN="${{ github.event.inputs.run }}"
+          
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # Cron: always fetch today's 12Z run
+            DATE=$(date -u +%Y%m%d)
+            RUN_HOUR="12"
+            echo "🕐 Scheduled run: targeting ${DATE} ${RUN_HOUR}Z"
+          elif [ -n "$INPUT_DATE" ] && [ -n "$INPUT_RUN" ]; then
+            # Manual: explicit date and run provided
+            DATE="$INPUT_DATE"
+            RUN_HOUR="$INPUT_RUN"
+            echo "👤 Manual run: targeting ${DATE} ${RUN_HOUR}Z (as specified)"
+          else
+            # Manual: fall back to "1 hour ago" logic
+            DATE=$(date -u -d '1 hour ago' +%Y%m%d)
+            RUN_HOUR=$(date -u -d '1 hour ago' +%H)
+            echo "👤 Manual run: targeting ${DATE} ${RUN_HOUR}Z (1hr ago default)"
+          fi
+          
+          echo "DATE=$DATE" >> $GITHUB_OUTPUT
+          echo "RUN_HOUR=$RUN_HOUR" >> $GITHUB_OUTPUT
+
       - name: Run pipeline (all 19 forecast hours, with upload)
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -42,11 +84,8 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          # Use the most recent HRRR run. Determine the run hour based on
-          # current UTC time, rounding down to the nearest hour (since we
-          # run at :45 past, the current hour's run should be published).
-          DATE=$(date -u -d '1 hour ago' +%Y%m%d)
-          RUN_HOUR=$(date -u -d '1 hour ago' +%H)
+          DATE="${{ steps.target.outputs.DATE }}"
+          RUN_HOUR="${{ steps.target.outputs.RUN_HOUR }}"
           
           echo "=== Pipeline: $DATE ${RUN_HOUR}Z (all forecast hours) ==="
           
@@ -59,9 +98,9 @@ jobs:
             echo "──────────────────────────────────────────"
             
             # Clear previous run's artifacts so we don't mix data
-            rm -rf tiles/ refc.grib2 refc.tif refc_byte.tif
+            rm -rf tiles/ refc.grib2 refc.tif refc_byte.tif refc_color.tif
             
-            # Run the pipeline, exit on any failure
+            # Run the pipeline, continue on failure to not block later hours
             python fetch_and_tile.py $DATE $RUN_HOUR $FH --upload || {
               echo "❌ Forecast hour $FH failed. Moving on to next hour."
               continue
@@ -70,7 +109,7 @@ jobs:
           
           echo ""
           echo "🎉 All forecast hours processed"
-      
+
       - name: Summarize output
         if: always()
         run: |
