@@ -110,11 +110,6 @@ the hour often returns 404 because the current hour's run hasn't been published 
 Current code fetches the current hour's run; may need to add a "1 hour ago" buffer
 when the production schedule is enabled.
 
-### Short runs have 16 forecast hours, not 19
-Only extended runs (00Z, 06Z, 12Z, 18Z) publish 48-hour forecasts. Short runs (other
-hours) publish 18-hour forecasts. Currently the loop tries all 19 hours and handles
-the 404s on fh16-18 via `continue`. Noisy logs but works.
-
 ### Content-type fallback is lazy
 `upload_tiles_to_r2` sends PNG as `image/png` and everything else as `text/html`.
 The `.mapml` XML file gets mislabeled. Not blocking, but worth fixing eventually.
@@ -147,7 +142,7 @@ python fetch_and_tile.py 20260419 0 0 --upload
 - [x] Phase 6a: Cloudflare account + R2 bucket + WSL installed
 - [x] Phase 6b: Pirate Weather Worker proxy deployed
 - [x] Phase 6b.5: Frontend migrated Netlify → Cloudflare Pages
-- [x] Phase 6c: HRRR pipeline on GitHub Actions + R2 (minus cron schedule)
+- [x] Phase 6c: HRRR pipeline on GitHub Actions + R2 (parallel uploads, ~22min end-to-end; cron deffered)
 - [ ] Phase 7: Frontend integration (timeline scrubber in studio)
 - [ ] Phase 8: Polish (NWS colors, animation)
 - [ ] Phase 9: Reveal to Darnell
