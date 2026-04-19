@@ -1,0 +1,32 @@
+# ── Python ────────────────────────────────────────
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# ── Secrets ───────────────────────────────────────
+.env
+.env.*
+*.key
+*.pem
+
+# ── Generated weather data ────────────────────────
+# These are outputs of our pipeline. They regenerate every run.
+*.grib2
+*.tif
+*.idx
+tiles/
+
+# ── Test / scratch images ─────────────────────────
+radar.png
+
+# ── OS cruft ──────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
