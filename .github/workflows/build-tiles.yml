@@ -45,8 +45,8 @@ jobs:
           # Use the most recent HRRR run. Determine the run hour based on
           # current UTC time, rounding down to the nearest hour (since we
           # run at :45 past, the current hour's run should be published).
-          DATE=$(date -u +%Y%m%d)
-          RUN_HOUR=$(date -u +%H)
+          DATE=$(date -u -d '1 hour ago' +%Y%m%d)
+          RUN_HOUR=$(date -u -d '1 hour ago' +%H)
           
           echo "=== Pipeline: $DATE ${RUN_HOUR}Z (all forecast hours) ==="
           
