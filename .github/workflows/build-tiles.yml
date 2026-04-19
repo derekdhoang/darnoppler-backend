@@ -1,8 +1,9 @@
 name: Build HRRR Tiles
 
 on:
+  # Manual trigger (you can still hit "Run workflow" in the UI)
   workflow_dispatch:
-
+  
 jobs:
   build-tiles:
     runs-on: ubuntu-latest
@@ -34,27 +35,47 @@ jobs:
           gdal_translate --version
           python -c "import pygrib; print(f'pygrib: {pygrib.__version__}')"
       
-      - name: Run pipeline (forecast hour 0, with upload)
+      - name: Run pipeline (all 19 forecast hours, with upload)
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
+          # Use the most recent HRRR run. Determine the run hour based on
+          # current UTC time, rounding down to the nearest hour (since we
+          # run at :45 past, the current hour's run should be published).
           DATE=$(date -u +%Y%m%d)
-          RUN_HOUR=00
-          FORECAST_HOUR=0
+          RUN_HOUR=$(date -u +%H)
           
-          echo "=== Pipeline: $DATE ${RUN_HOUR}Z fh${FORECAST_HOUR} ==="
-          python fetch_and_tile.py $DATE $RUN_HOUR $FORECAST_HOUR --upload
+          echo "=== Pipeline: $DATE ${RUN_HOUR}Z (all forecast hours) ==="
+          
+          # Loop through all 19 forecast hours
+          for FH in $(seq 0 18); do
+            FH_PADDED=$(printf "%02d" $FH)
+            echo ""
+            echo "──────────────────────────────────────────"
+            echo "Forecast hour $FH_PADDED"
+            echo "──────────────────────────────────────────"
+            
+            # Clear previous run's artifacts so we don't mix data
+            rm -rf tiles/ refc.grib2 refc.tif refc_byte.tif
+            
+            # Run the pipeline, exit on any failure
+            python fetch_and_tile.py $DATE $RUN_HOUR $FH --upload || {
+              echo "❌ Forecast hour $FH failed. Moving on to next hour."
+              continue
+            }
+          done
+          
+          echo ""
+          echo "🎉 All forecast hours processed"
       
       - name: Summarize output
+        if: always()
         run: |
-          echo "Files produced:"
-          ls -lh *.grib2 *.tif 2>/dev/null || echo "(no files at root)"
+          echo "Last run artifacts:"
+          ls -lh *.grib2 *.tif 2>/dev/null || echo "(no artifacts)"
           echo ""
-          echo "Tile count:"
-          find tiles -name "*.png" | wc -l
-          echo ""
-          echo "Folder sizes:"
-          du -sh tiles/ 2>/dev/null || echo "(no tiles folder)"
+          echo "Last tile count:"
+          find tiles -name "*.png" 2>/dev/null | wc -l
