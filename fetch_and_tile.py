@@ -173,6 +173,34 @@ def convert_to_byte(input_tif: str, output_tif: str) -> None:
 
     print(f"✓ Wrote {output_tif}")
 
+# ── Function: Apply NWS color ramp to byte GeoTIFF ────────────
+def colorize_tif(input_tif: str, output_tif: str, color_ramp_path: str) -> None:
+    """
+    Apply a color ramp to an 8-bit grayscale GeoTIFF, producing an RGBA GeoTIFF
+    that looks like a standard weather radar display.
+    
+    Uses gdaldem color-relief to map pixel values to RGB + alpha.
+    """
+    cmd = [
+        'gdaldem',
+        'color-relief',
+        input_tif,
+        color_ramp_path,
+        output_tif,
+        '-alpha',       # include alpha channel (for "no echo" transparency)
+        '-nearest_color_entry',  # don't interpolate between color stops
+        '-q',           # quiet
+    ]
+    
+    print(f"Colorizing: {input_tif} → {output_tif}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        print(f"❌ gdaldem color-relief failed:")
+        print(result.stderr)
+        raise RuntimeError("gdaldem color-relief failed")
+    
+    print(f"✓ Wrote {output_tif}")
 
 # ── Function: Generate XYZ tile pyramid ───────────────────────
 def generate_tiles(
@@ -310,14 +338,16 @@ def main():
 
     convert_to_byte('refc.tif', 'refc_byte.tif')
     print()
+    
+    colorize_tif('refc_byte.tif', 'refc_color.tif', 'color_ramp.txt')
+    print()
 
     generate_tiles(
-        'refc_byte.tif',
+        'refc_color.tif',
         args.output_dir,
         min_zoom=args.min_zoom,
         max_zoom=args.max_zoom,
     )
-
     if args.upload:
         print("\n=== Uploading to R2 (parallel) ===")
 

@@ -1,0 +1,26 @@
+# NWS Composite Reflectivity Color Ramp
+# Format: pixel_value R G B A
+# pixel_value is in the 0-255 range of the byte-scaled GeoTIFF
+# (which corresponds to dBZ values -10 to 75, linearly scaled)
+#
+# The alpha channel is 0 for very low dBZ (makes "no echo" transparent)
+# and 255 for anything meaningful (opaque).
+#
+# Color breakpoints roughly match the NWS standard reflectivity color scheme.
+
+# pixel  R    G    B    A
+0        0    0    0    0        # -10 dBZ, transparent (no echo)
+14       0    0    0    0        # ~-5 dBZ, still transparent
+15       100  200  100  180      # ~-5 dBZ, faint light green (trace)
+42       0    236  0    255      # ~5 dBZ, light green (light drizzle)
+71       0    176  0    255      # ~15 dBZ, medium green (light rain)
+100      0    100  0    255      # ~25 dBZ, dark green (moderate rain)
+115      253  232  0    255      # ~30 dBZ, yellow (moderate)
+135      255  176  0    255      # ~35 dBZ, orange-yellow
+150      255  100  0    255      # ~40 dBZ, orange (heavy)
+165      231  0    0    255      # ~45 dBZ, red
+180      180  0    0    255      # ~50 dBZ, dark red (very heavy)
+195      213  0    213  255      # ~55 dBZ, magenta (extreme, hail likely)
+225      170  0    170  255      # ~65 dBZ, purple
+242      255  255  255  255      # ~72 dBZ, white (tornado debris signature)
+255      255  255  255  255      # 75 dBZ, saturated white
