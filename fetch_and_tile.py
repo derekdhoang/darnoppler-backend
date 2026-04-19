@@ -5,6 +5,7 @@ Fetches NOAA HRRR composite reflectivity, reprojects, and tiles it.
 import argparse
 import subprocess
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
 import requests
@@ -209,7 +210,25 @@ def generate_tiles(
     print(f"✓ Generated {tile_count} tiles")
 
 
-# ── Function: Upload a folder of tiles to R2 ──────────────────
+# ── Helper: Upload a single file (used by ThreadPoolExecutor) ──
+def _upload_one_file(s3, local_path: str, bucket: str, r2_key: str) -> None:
+    """
+    Upload a single file to R2. Used as the unit of work for parallel uploads.
+    """
+    content_type = 'image/png' if local_path.endswith('.png') else 'text/html'
+
+    s3.upload_file(
+        local_path,
+        bucket,
+        r2_key,
+        ExtraArgs={
+            'ContentType': content_type,
+            'CacheControl': 'public, max-age=3600',
+        }
+    )
+
+
+# ── Function: Upload a folder of tiles to R2 (parallel) ───────
 def upload_tiles_to_r2(
     local_dir: str,
     bucket: str,
@@ -217,12 +236,15 @@ def upload_tiles_to_r2(
     account_id: str,
     access_key: str,
     secret_key: str,
+    max_workers: int = 20,
 ) -> int:
     """
-    Upload every file in local_dir/ to an R2 bucket under the given prefix.
+    Upload every file in local_dir/ to an R2 bucket under the given prefix,
+    using a thread pool for parallel uploads.
 
     Returns the number of files uploaded.
     """
+    # boto3 client is thread-safe; all workers share one.
     s3 = boto3.client(
         's3',
         endpoint_url=f'https://{account_id}.r2.cloudflarestorage.com',
@@ -231,26 +253,27 @@ def upload_tiles_to_r2(
         region_name='auto',
     )
 
-    uploaded = 0
-
+    # Collect every (local_path, r2_key) pair first.
+    upload_tasks = []
     for root, dirs, files in os.walk(local_dir):
         for filename in files:
             local_path = os.path.join(root, filename)
-
             rel_path = os.path.relpath(local_path, local_dir)
             r2_key = f"{prefix}/{rel_path}".replace('\\', '/')
+            upload_tasks.append((local_path, r2_key))
 
-            content_type = 'image/png' if filename.endswith('.png') else 'text/html'
+    uploaded = 0
 
-            s3.upload_file(
-                local_path,
-                bucket,
-                r2_key,
-                ExtraArgs={
-                    'ContentType': content_type,
-                    'CacheControl': 'public, max-age=3600',
-                }
-            )
+    # Dispatch uploads to a thread pool for parallel execution.
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_upload_one_file, s3, local_path, bucket, r2_key): r2_key
+            for local_path, r2_key in upload_tasks
+        }
+
+        # Wait for each to complete. Re-raises exceptions if any upload failed.
+        for future in as_completed(futures):
+            future.result()
             uploaded += 1
 
     return uploaded
@@ -273,7 +296,6 @@ def main():
 
     print(f"=== HRRR {args.date} {args.run_hour:02d}Z — forecast hour {args.forecast_hour} ===\n")
 
-    # Existing pipeline steps
     idx_text = fetch_idx(args.date, args.run_hour, args.forecast_hour)
     start, end = find_variable_range(idx_text, 'REFC', 'entire atmosphere')
     print(f"REFC byte range: {start} to {end} ({end - start + 1} bytes)\n")
@@ -296,9 +318,8 @@ def main():
         max_zoom=args.max_zoom,
     )
 
-    # ── Optional R2 upload ────────────────────────────────────
     if args.upload:
-        print("\n=== Uploading to R2 ===")
+        print("\n=== Uploading to R2 (parallel) ===")
 
         account_id = os.environ.get('R2_ACCOUNT_ID')
         access_key = os.environ.get('R2_ACCESS_KEY_ID')
