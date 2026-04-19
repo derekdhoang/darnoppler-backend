@@ -1,0 +1,63 @@
+name: Build HRRR Tiles
+
+on:
+  # Allow manually triggering from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  build-tiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+      # ── Step 1: Get the code ───────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      # ── Step 2: Install Python ─────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      # ── Step 3: Install system dependencies (GDAL, etc.) ───
+      - name: Install GDAL and system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin python3-gdal libgdal-dev
+      
+      # ── Step 4: Install Python packages ────────────────────
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      # ── Step 5: Verify tools are ready ─────────────────────
+      - name: Verify installation
+        run: |
+          python --version
+          gdal2tiles.py --version
+          gdal_translate --version
+          python -c "import pygrib; print(f'pygrib: {pygrib.__version__}')"
+      
+      # ── Step 6: Run the pipeline for ONE forecast hour ─────
+      - name: Run pipeline (forecast hour 0)
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          RUN_HOUR=00
+          FORECAST_HOUR=0
+          
+          echo "=== Testing pipeline: $DATE ${RUN_HOUR}Z fh${FORECAST_HOUR} ==="
+          python fetch_and_tile.py $DATE $RUN_HOUR $FORECAST_HOUR
+      
+      # ── Step 7: Show what we produced ──────────────────────
+      - name: Summarize output
+        run: |
+          echo "Files produced:"
+          ls -lh *.grib2 *.tif 2>/dev/null || echo "(no files at root)"
+          echo ""
+          echo "Tile count:"
+          find tiles -name "*.png" | wc -l
+          echo ""
+          echo "Folder sizes:"
+          du -sh tiles/ 2>/dev/null || echo "(no tiles folder)"
