@@ -3,6 +3,7 @@ Darnoppler HRRR Pipeline
 Fetches NOAA HRRR composite reflectivity, reprojects, and tiles it.
 """
 import argparse
+import json
 import subprocess
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,12 +22,8 @@ NOMADS_BASE = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/hrrr/prod"
 
 # ── Function: Fetch the .idx file ─────────────────────────────
 def fetch_idx(date: str, run_hour: int, forecast_hour: int) -> str:
-    """
-    Fetch the .idx companion file for a given HRRR run.
-    """
     filename = f"hrrr.t{run_hour:02d}z.wrfsfcf{forecast_hour:02d}.grib2.idx"
     url = f"{NOMADS_BASE}/hrrr.{date}/conus/{filename}"
-
     print(f"Fetching idx: {url}")
     response = requests.get(url)
     response.raise_for_status()
@@ -35,64 +32,38 @@ def fetch_idx(date: str, run_hour: int, forecast_hour: int) -> str:
 
 # ── Function: Find variable byte range in the .idx ────────────
 def find_variable_range(idx_text: str, variable: str, level: str) -> tuple[int, int]:
-    """
-    Find the byte range for a specific variable in a GRIB2 .idx file.
-    Returns (start_byte, end_byte) — inclusive.
-    """
     lines = idx_text.strip().split('\n')
-
     for i, line in enumerate(lines):
         fields = line.split(':')
         if len(fields) < 5:
             continue
-
         if fields[3] == variable and fields[4] == level:
             start = int(fields[1])
-
             if i + 1 < len(lines) and lines[i + 1].strip():
                 next_fields = lines[i + 1].split(':')
                 end = int(next_fields[1]) - 1
             else:
                 end = -1
-
             return (start, end)
-
     raise ValueError(f"Variable {variable!r} at level {level!r} not found in index")
 
 
 # ── Function: Fetch GRIB2 bytes via HTTP range request ────────
-def fetch_grib2_range(
-    date: str,
-    run_hour: int,
-    forecast_hour: int,
-    start: int,
-    end: int
-) -> bytes:
-    """
-    Fetch only the specified byte range of a GRIB2 file using HTTP Range.
-    """
+def fetch_grib2_range(date: str, run_hour: int, forecast_hour: int, start: int, end: int) -> bytes:
     filename = f"hrrr.t{run_hour:02d}z.wrfsfcf{forecast_hour:02d}.grib2"
     url = f"{NOMADS_BASE}/hrrr.{date}/conus/{filename}"
-
     range_header = f"bytes={start}-{end}" if end >= 0 else f"bytes={start}-"
-
     print(f"Fetching {filename} with Range: {range_header}")
     response = requests.get(url, headers={'Range': range_header})
     response.raise_for_status()
-
     if response.status_code != 206:
         print(f"⚠️  Warning: server returned {response.status_code}, expected 206")
-
     print(f"Received {len(response.content)} bytes")
     return response.content
 
 
 # ── Function: Convert GRIB2 bytes → georeferenced GeoTIFF ─────
 def write_geotiff(grib2_path: str, output_path: str) -> None:
-    """
-    Read a GRIB2 file and write it out as a georeferenced GeoTIFF
-    in the source Lambert Conformal projection.
-    """
     grbs = pygrib.open(grib2_path)
     grb = grbs.message(1)
     data = grb.values.astype(np.float32)
@@ -121,25 +92,16 @@ def write_geotiff(grib2_path: str, output_path: str) -> None:
 
     transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
     sw_x, sw_y = transformer.transform(lon0, lat0)
-
     nw_x = sw_x
     nw_y = sw_y + (ny - 1) * dy
-
     data_flipped = np.flipud(data)
-
     transform = from_origin(nw_x, nw_y, dx, dy)
 
     with rasterio.open(
-        output_path,
-        'w',
-        driver='GTiff',
-        height=ny,
-        width=nx,
-        count=1,
-        dtype=data_flipped.dtype,
-        crs=crs,
-        transform=transform,
-        nodata=-10,
+        output_path, 'w',
+        driver='GTiff', height=ny, width=nx,
+        count=1, dtype=data_flipped.dtype,
+        crs=crs, transform=transform, nodata=-10,
     ) as dst:
         dst.write(data_flipped, 1)
 
@@ -148,89 +110,50 @@ def write_geotiff(grib2_path: str, output_path: str) -> None:
 
 # ── Function: Convert Float32 GeoTIFF → 8-bit Byte GeoTIFF ────
 def convert_to_byte(input_tif: str, output_tif: str) -> None:
-    """
-    Convert a Float32 GeoTIFF to 8-bit Byte (required for PNG tile output).
-    Maps dBZ range [-10, 75] linearly to [0, 255]. Sets 0 as nodata.
-    """
     cmd = [
-        'gdal_translate',
-        '-of', 'GTiff',
-        '-ot', 'Byte',
+        'gdal_translate', '-of', 'GTiff', '-ot', 'Byte',
         '-scale', '-10', '75', '0', '255',
-        '-a_nodata', '0',
-        '-q',
-        input_tif,
-        output_tif,
+        '-a_nodata', '0', '-q',
+        input_tif, output_tif,
     ]
-
     print(f"Converting to 8-bit: {input_tif} → {output_tif}")
     result = subprocess.run(cmd, capture_output=True, text=True)
-
     if result.returncode != 0:
-        print(f"❌ gdal_translate failed:")
-        print(result.stderr)
+        print(f"❌ gdal_translate failed:\n{result.stderr}")
         raise RuntimeError("gdal_translate failed")
-
     print(f"✓ Wrote {output_tif}")
+
 
 # ── Function: Apply NWS color ramp to byte GeoTIFF ────────────
 def colorize_tif(input_tif: str, output_tif: str, color_ramp_path: str) -> None:
-    """
-    Apply a color ramp to an 8-bit grayscale GeoTIFF, producing an RGBA GeoTIFF
-    that looks like a standard weather radar display.
-    
-    Uses gdaldem color-relief to map pixel values to RGB + alpha.
-    """
     cmd = [
-        'gdaldem',
-        'color-relief',
-        input_tif,
-        color_ramp_path,
-        output_tif,
-        '-alpha',       # include alpha channel (for "no echo" transparency)
-        '-nearest_color_entry',  # don't interpolate between color stops
-        '-q',           # quiet
+        'gdaldem', 'color-relief',
+        input_tif, color_ramp_path, output_tif,
+        '-alpha', '-nearest_color_entry', '-q',
     ]
-    
     print(f"Colorizing: {input_tif} → {output_tif}")
     result = subprocess.run(cmd, capture_output=True, text=True)
-    
     if result.returncode != 0:
-        print(f"❌ gdaldem color-relief failed:")
-        print(result.stderr)
+        print(f"❌ gdaldem color-relief failed:\n{result.stderr}")
         raise RuntimeError("gdaldem color-relief failed")
-    
     print(f"✓ Wrote {output_tif}")
 
+
 # ── Function: Generate XYZ tile pyramid ───────────────────────
-def generate_tiles(
-    input_tif: str,
-    output_dir: str,
-    min_zoom: int = 4,
-    max_zoom: int = 8,
-    processes: int = 4,
-) -> None:
-    """
-    Generate an XYZ tile pyramid from a byte-scaled GeoTIFF.
-    """
+def generate_tiles(input_tif: str, output_dir: str, min_zoom: int = 4, max_zoom: int = 8, processes: int = 4) -> None:
     cmd = [
         'gdal2tiles.py',
         '-z', f'{min_zoom}-{max_zoom}',
         '--xyz',
         f'--processes={processes}',
         '-q',
-        input_tif,
-        output_dir,
+        input_tif, output_dir,
     ]
-
     print(f"Generating tiles (zoom {min_zoom}-{max_zoom}) → {output_dir}/")
     result = subprocess.run(cmd, capture_output=True, text=True)
-
     if result.returncode != 0:
-        print(f"❌ gdal2tiles.py failed:")
-        print(result.stderr)
+        print(f"❌ gdal2tiles.py failed:\n{result.stderr}")
         raise RuntimeError("gdal2tiles.py failed")
-
     tile_count = sum(1 for _ in subprocess.run(
         ['find', output_dir, '-name', '*.png'],
         capture_output=True, text=True
@@ -238,41 +161,17 @@ def generate_tiles(
     print(f"✓ Generated {tile_count} tiles")
 
 
-# ── Helper: Upload a single file (used by ThreadPoolExecutor) ──
+# ── Helper: Upload a single file ──────────────────────────────
 def _upload_one_file(s3, local_path: str, bucket: str, r2_key: str) -> None:
-    """
-    Upload a single file to R2. Used as the unit of work for parallel uploads.
-    """
     content_type = 'image/png' if local_path.endswith('.png') else 'text/html'
-
     s3.upload_file(
-        local_path,
-        bucket,
-        r2_key,
-        ExtraArgs={
-            'ContentType': content_type,
-            'CacheControl': 'public, max-age=3600',
-        }
+        local_path, bucket, r2_key,
+        ExtraArgs={'ContentType': content_type, 'CacheControl': 'public, max-age=3600'},
     )
 
 
 # ── Function: Upload a folder of tiles to R2 (parallel) ───────
-def upload_tiles_to_r2(
-    local_dir: str,
-    bucket: str,
-    prefix: str,
-    account_id: str,
-    access_key: str,
-    secret_key: str,
-    max_workers: int = 20,
-) -> int:
-    """
-    Upload every file in local_dir/ to an R2 bucket under the given prefix,
-    using a thread pool for parallel uploads.
-
-    Returns the number of files uploaded.
-    """
-    # boto3 client is thread-safe; all workers share one.
+def upload_tiles_to_r2(local_dir: str, bucket: str, prefix: str, account_id: str, access_key: str, secret_key: str, max_workers: int = 20) -> int:
     s3 = boto3.client(
         's3',
         endpoint_url=f'https://{account_id}.r2.cloudflarestorage.com',
@@ -280,8 +179,6 @@ def upload_tiles_to_r2(
         aws_secret_access_key=secret_key,
         region_name='auto',
     )
-
-    # Collect every (local_path, r2_key) pair first.
     upload_tasks = []
     for root, dirs, files in os.walk(local_dir):
         for filename in files:
@@ -291,23 +188,46 @@ def upload_tiles_to_r2(
             upload_tasks.append((local_path, r2_key))
 
     uploaded = 0
-
-    # Dispatch uploads to a thread pool for parallel execution.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(_upload_one_file, s3, local_path, bucket, r2_key): r2_key
             for local_path, r2_key in upload_tasks
         }
-
-        # Wait for each to complete. Re-raises exceptions if any upload failed.
         for future in as_completed(futures):
             future.result()
             uploaded += 1
-
     return uploaded
 
 
-# ── Test / Entry point ────────────────────────────────────────
+# ── Function: Update KV inventory ─────────────────────────────
+def update_kv_inventory(date: str, run_hour: int, account_id: str, kv_namespace_id: str, api_token: str) -> None:
+    """
+    Write the latest run info to Cloudflare KV so the tile-proxy Worker
+    knows what data is available.
+    """
+    payload = {
+        "date": date,
+        "run": f"{run_hour:02d}z",
+        "forecastHours": list(range(19)),
+        "availableRuns": [f"{date}/{run_hour:02d}z"],
+    }
+
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
+        f"/storage/kv/namespaces/{kv_namespace_id}/values/latest"
+    )
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+
+    print(f"Writing KV inventory: {payload}")
+    response = requests.put(url, headers=headers, data=json.dumps(payload))
+    response.raise_for_status()
+    print(f"✓ KV inventory updated → {date}/{run_hour:02d}z")
+
+
+# ── Entry point ───────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
         description='Fetch HRRR composite reflectivity and generate web map tiles.'
@@ -319,7 +239,6 @@ def main():
     parser.add_argument('--min-zoom', type=int, default=4, help='Minimum zoom level')
     parser.add_argument('--max-zoom', type=int, default=8, help='Maximum zoom level')
     parser.add_argument('--upload', action='store_true', help='Upload tiles to R2 after generation')
-
     args = parser.parse_args()
 
     print(f"=== HRRR {args.date} {args.run_hour:02d}Z — forecast hour {args.forecast_hour} ===\n")
@@ -338,7 +257,7 @@ def main():
 
     convert_to_byte('refc.tif', 'refc_byte.tif')
     print()
-    
+
     colorize_tif('refc_byte.tif', 'refc_color.tif', 'color_ramp.txt')
     print()
 
@@ -348,6 +267,7 @@ def main():
         min_zoom=args.min_zoom,
         max_zoom=args.max_zoom,
     )
+
     if args.upload:
         print("\n=== Uploading to R2 (parallel) ===")
 
@@ -372,6 +292,22 @@ def main():
             secret_key,
         )
         print(f"✓ Uploaded {uploaded} files to s3://{bucket}/{prefix}/")
+
+        # Update KV inventory so the Worker serves the new run
+        kv_namespace_id = os.environ.get('KV_NAMESPACE_ID')
+        cf_api_token = os.environ.get('CF_API_TOKEN')
+
+        if not all([kv_namespace_id, cf_api_token]):
+            print("⚠️  Missing KV credentials — skipping inventory update")
+            print("   Required: KV_NAMESPACE_ID, CF_API_TOKEN")
+        else:
+            update_kv_inventory(
+                args.date,
+                args.run_hour,
+                account_id,
+                kv_namespace_id,
+                cf_api_token,
+            )
 
     print("\n🎉 Pipeline complete!")
 

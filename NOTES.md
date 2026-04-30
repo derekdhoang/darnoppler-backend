@@ -146,3 +146,15 @@ python fetch_and_tile.py 20260419 0 0 --upload
 - [ ] Phase 7: Frontend integration (timeline scrubber in studio)
 - [ ] Phase 8: Polish (NWS colors, animation)
 - [ ] Phase 9: Reveal to Darnell
+
+## Phase 8: MRMS (Multi-Radar Multi-Sensor) — Replace Observed Radar
+
+Replace NOAA WMS with MRMS composite reflectivity for higher-resolution, 
+more frequently-updated observed radar.
+
+- Build separate pipeline (similar structure to HRRR)
+- Product: MergedReflectivityQCComposite
+- Update cadence: consider 5-10 min to manage R2 ops budget
+- NWS color ramp (same as HRRR)
+- Separate R2 prefix: `mrms/YYYYMMDD/HH/MM/...`
+
