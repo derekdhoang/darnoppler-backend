@@ -3,7 +3,7 @@ name: MRMS Ingest
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/2 * * * *'
+    - cron: '*/5 * * * *'
 
 jobs:
   ingest:

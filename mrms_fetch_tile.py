@@ -20,7 +20,7 @@ from pathlib import Path
 # ── CONFIG ────────────────────────────────────────────────────────────
 MRMS_BASE    = "https://mrms.ncep.noaa.gov/2D/MergedReflectivityQCComposite"
 BBOX         = (-104.5, 49.5, -80.0, 36.0)   # west, north, east, south
-ZOOM         = "5-8"
+ZOOM         = "5-7"
 HISTORY_HRS  = 2          # rolling window to keep
 MAX_FRAMES   = 60         # 2 hrs × 30 frames/hr
 
