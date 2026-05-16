@@ -34,5 +34,6 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           KV_NAMESPACE_ID: "77eaa275e835453ca6db4bb0f9b9ae97"
         run: python mrms_fetch_tile.py
