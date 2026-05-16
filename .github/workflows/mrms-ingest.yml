@@ -1,0 +1,38 @@
+name: MRMS Ingest
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/2 * * * *'
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install GDAL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gdal-bin python3-gdal libgdal-dev
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Run MRMS ingest
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          KV_NAMESPACE_ID: "77eaa275e835453ca6db4bb0f9b9ae97"
+        run: python mrms_fetch_tile.py
