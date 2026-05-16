@@ -21,8 +21,8 @@ from pathlib import Path
 MRMS_BASE    = "https://mrms.ncep.noaa.gov/2D/MergedReflectivityQCComposite"
 BBOX         = (-104.5, 49.5, -80.0, 36.0)   # west, north, east, south
 ZOOM         = "5-7"
-HISTORY_HRS  = 2          # rolling window to keep
-MAX_FRAMES   = 60         # 2 hrs × 30 frames/hr
+HISTORY_HRS  = 4          # rolling window to keep
+MAX_FRAMES   = 10
 
 # R2 credentials — same env vars as HRRR pipeline
 R2_ACCOUNT_ID      = os.environ.get("R2_ACCOUNT_ID")
