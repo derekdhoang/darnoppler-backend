@@ -136,7 +136,10 @@ def purge_old_frames(r2, all_frames):
         paginator = r2.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=R2_BUCKET, Prefix=prefix):
             for obj in page.get("Contents", []):
-                r2.delete_object(Bucket=R2_BUCKET, Key=obj["Key"])
+		try:
+                    r2.delete_object(Bucket=R2_BUCKET, Key=obj["Key"])
+                except Exception as e:
+                   print(f"  ⚠ Delete failed for {obj['Key']}: {e} — skipping")
         print(f"  🗑 Purged {ts}")
 
     remaining = [ts for ts in all_frames if ts not in to_delete]
