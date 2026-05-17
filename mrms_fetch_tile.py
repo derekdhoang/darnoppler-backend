@@ -21,14 +21,14 @@ from pathlib import Path
 MRMS_BASE    = "https://mrms.ncep.noaa.gov/2D/MergedReflectivityQCComposite"
 BBOX         = (-104.5, 49.5, -80.0, 36.0)   # west, north, east, south
 ZOOM         = "5-8"
-HISTORY_HRS  = 4          # rolling window to keep
+HISTORY_HRS  = 4
 MAX_FRAMES   = 10
 
-# R2 credentials — same env vars as HRRR pipeline
-R2_ACCOUNT_ID      = os.environ.get("R2_ACCOUNT_ID")
-R2_ACCESS_KEY_ID   = os.environ.get("R2_ACCESS_KEY_ID")
+# R2 credentials
+R2_ACCOUNT_ID        = os.environ.get("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID     = os.environ.get("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
-R2_BUCKET          = os.environ.get("R2_BUCKET")
+R2_BUCKET            = os.environ.get("R2_BUCKET")
 
 # Cloudflare API for KV writes
 CF_ACCOUNT_ID  = os.environ.get("CF_ACCOUNT_ID", R2_ACCOUNT_ID)
@@ -68,7 +68,6 @@ def run(cmd, desc):
         sys.exit(1)
 
 def ts_to_dt(ts):
-    """Convert '20260516-053638' to datetime."""
     return datetime.strptime(ts, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
 
 # ── UPLOAD ────────────────────────────────────────────────────────────
@@ -78,8 +77,8 @@ def upload_tiles(r2, timestamp, tile_dir):
     print(f"  Uploading {len(files)} tiles to R2 ({prefix})...")
 
     for i, fpath in enumerate(files):
-        rel   = fpath.relative_to(tile_dir)
-        key   = f"{prefix}/{rel}"
+        rel = fpath.relative_to(tile_dir)
+        key = f"{prefix}/{rel}"
         r2.upload_file(
             str(fpath), R2_BUCKET, key,
             ExtraArgs={"ContentType": "image/png",
@@ -93,28 +92,31 @@ def upload_tiles(r2, timestamp, tile_dir):
 
 # ── KV INVENTORY ──────────────────────────────────────────────────────
 def update_kv_inventory(all_frames, latest):
-    """Write frame inventory to KV via Cloudflare REST API."""
     if not CF_API_TOKEN:
         print("  ⚠ No CF_API_TOKEN — skipping KV update")
         return
 
     payload = {
-        "latest":     latest,
-        "frames":     all_frames,
+        "latest":      latest,
+        "frames":      all_frames,
         "lag_minutes": round(
             (datetime.now(timezone.utc) - ts_to_dt(latest)).total_seconds() / 60, 1
         ),
-        "bbox":       "upper-midwest",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "bbox":        "upper-midwest",
+        "updated_at":  datetime.now(timezone.utc).isoformat(),
     }
 
-    url = (f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
-           f"/storage/kv/namespaces/{KV_NAMESPACE}/values/mrms_inventory")
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
+        f"/storage/kv/namespaces/{KV_NAMESPACE}/values/mrms_inventory"
+    )
 
     r = requests.put(
         url,
-        headers={"Authorization": f"Bearer {CF_API_TOKEN}",
-                 "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {CF_API_TOKEN}",
+            "Content-Type":  "application/json",
+        },
         data=json.dumps(payload)
     )
     if r.ok:
@@ -124,26 +126,24 @@ def update_kv_inventory(all_frames, latest):
 
 # ── PURGE OLD FRAMES ──────────────────────────────────────────────────
 def purge_old_frames(r2, all_frames):
-    """Delete R2 tiles for frames older than HISTORY_HRS."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=HISTORY_HRS)
+    cutoff    = datetime.now(timezone.utc) - timedelta(hours=HISTORY_HRS)
     to_delete = [ts for ts in all_frames if ts_to_dt(ts) < cutoff]
 
     if not to_delete:
         return all_frames
 
     for ts in to_delete:
-        prefix = f"mrms/tiles/{ts}/"
+        prefix    = f"mrms/tiles/{ts}/"
         paginator = r2.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=R2_BUCKET, Prefix=prefix):
             for obj in page.get("Contents", []):
-		try:
+                try:
                     r2.delete_object(Bucket=R2_BUCKET, Key=obj["Key"])
                 except Exception as e:
-                   print(f"  ⚠ Delete failed for {obj['Key']}: {e} — skipping")
+                    print(f"  ⚠ Delete failed for {obj['Key']}: {e} — skipping")
         print(f"  🗑 Purged {ts}")
 
-    remaining = [ts for ts in all_frames if ts not in to_delete]
-    return remaining
+    return [ts for ts in all_frames if ts not in to_delete]
 
 # ── MAIN PIPELINE ─────────────────────────────────────────────────────
 def process(timestamp):
@@ -169,11 +169,13 @@ def process(timestamp):
     # 3. Crop to Upper Midwest
     w, n, e, s = BBOX
     run(f"gdal_translate -projwin {w} {n} {e} {s} -of GTiff "
-        f"mrms_raw_full.grib2 mrms_crop.tif", "Cropping to Upper Midwest")
+        f"mrms_raw_full.grib2 mrms_crop.tif",
+        "Cropping to Upper Midwest")
 
     # 4. Scale dBZ to 8-bit
     run("gdal_translate -ot Byte -scale -10 75 1 254 -a_nodata 255 "
-        "mrms_crop.tif mrms_byte.tif", "Scaling to 8-bit")
+        "mrms_crop.tif mrms_byte.tif",
+        "Scaling to 8-bit")
 
     # 5. Colorize
     run("gdaldem color-relief mrms_byte.tif color_ramp.txt mrms_color.tif -alpha",
@@ -181,7 +183,8 @@ def process(timestamp):
 
     # 6. Reproject
     run("gdalwarp -s_srs EPSG:4326 -t_srs EPSG:3857 -r near -of GTiff "
-        "mrms_color.tif mrms_3857.tif", "Reprojecting to EPSG:3857")
+        "mrms_color.tif mrms_3857.tif",
+        "Reprojecting to EPSG:3857")
 
     # 7. Tile
     os.makedirs(out_dir, exist_ok=True)
@@ -214,16 +217,18 @@ if __name__ == "__main__":
         print("\n── Upload phase ──")
         r2 = get_r2()
 
-        # Upload new tiles
         upload_tiles(r2, ts, out_dir)
 
-        # Load existing inventory from KV or build fresh
+        # Load existing inventory from KV
         existing = []
         if CF_API_TOKEN:
-            url = (f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
-                   f"/storage/kv/namespaces/{KV_NAMESPACE}/values/mrms_inventory")
+            url = (
+                f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
+                f"/storage/kv/namespaces/{KV_NAMESPACE}/values/mrms_inventory"
+            )
             resp = requests.get(
-                url, headers={"Authorization": f"Bearer {CF_API_TOKEN}"}
+                url,
+                headers={"Authorization": f"Bearer {CF_API_TOKEN}"}
             )
             if resp.ok:
                 try:
@@ -237,7 +242,7 @@ if __name__ == "__main__":
         # Purge old frames
         all_frames = purge_old_frames(r2, all_frames)
 
-        # Keep max frames cap
+        # Cap at MAX_FRAMES
         if len(all_frames) > MAX_FRAMES:
             all_frames = all_frames[-MAX_FRAMES:]
 
